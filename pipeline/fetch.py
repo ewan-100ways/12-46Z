@@ -31,18 +31,23 @@ with open(f'catalogue/{a.source}/files.csv', encoding='utf-8') as f:
     rows = [r for r in csv.DictReader(f) if re.search(a.match, ' '.join(r.values()))]
 
 
+SLACK = {'neads': 0, 'faa': 1024}
+
+
 def fetch(row):
     url, place = PLACES[a.source](row)
     path = os.path.join(a.downloads, place)
     size = int(row['bytes'])
-    if os.path.exists(path) and os.path.getsize(path) == size:
+    whole = lambda p: abs(os.path.getsize(p) - size) <= SLACK[a.source]
+    if os.path.exists(path) and whole(path):
         return 0
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    part = f'{path}.{os.getpid()}.part'
     for attempt in range(4):
         try:
-            urllib.request.urlretrieve(url, path + '.part')
-            if os.path.getsize(path + '.part') == size:
-                os.replace(path + '.part', path)
+            urllib.request.urlretrieve(url, part)
+            if whole(part):
+                os.replace(part, path)
                 return size
         except OSError:
             pass
