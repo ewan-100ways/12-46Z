@@ -1,27 +1,63 @@
+import argparse
+import concurrent.futures
 import csv
 import os
-import sys
+import re
+import time
 import urllib.parse
 import urllib.request
 
-ITEM = 'https://archive.org/download/rdodneadsaudio/'
-CATALOGUE = 'catalogue/neads/files.csv'
 
-downloads, stems = sys.argv[1], sys.argv[2:]
-with open(CATALOGUE, encoding='utf-8') as f:
-    rows = {os.path.basename(r['path'])[:-4]: r for r in csv.DictReader(f)}
-for stem in stems:
-    row = rows.get(stem)
-    if not row:
-        raise SystemExit(f'{stem}: not in the catalogue')
-    folder = os.path.join(downloads, stem)
-    path = os.path.join(folder, stem + '.mp3')
-    if os.path.exists(path) and os.path.getsize(path) == int(row['bytes']):
-        print(stem, 'already here')
-        continue
-    os.makedirs(folder, exist_ok=True)
-    urllib.request.urlretrieve(ITEM + urllib.parse.quote(row['path']), path + '.part')
-    if os.path.getsize(path + '.part') != int(row['bytes']):
-        raise SystemExit(f'{stem}: {os.path.getsize(path + ".part")} bytes, the catalogue says {row["bytes"]}')
-    os.replace(path + '.part', path)
-    print(stem, row['bytes'], 'bytes')
+def neads(row):
+    name = os.path.basename(row['path'])
+    release = re.search(r'RDOD_(\d{8})', row['path'])[1]
+    url = 'https://archive.org/download/rdodneadsaudio/' + urllib.parse.quote(row['path'])
+    return url, os.path.join(release, os.path.splitext(name)[0], name)
+
+
+def faa(row):
+    return row['path'], os.path.join('7419198', row['naid'], row['naid'] + '.mp3')
+
+
+PLACES = {'neads': neads, 'faa': faa}
+
+args = argparse.ArgumentParser()
+args.add_argument('source', choices=PLACES)
+args.add_argument('downloads')
+args.add_argument('--match', default='')
+args.add_argument('--jobs', type=int, default=6)
+a = args.parse_args()
+with open(f'catalogue/{a.source}/files.csv', encoding='utf-8') as f:
+    rows = [r for r in csv.DictReader(f) if re.search(a.match, ' '.join(r.values()))]
+
+
+def fetch(row):
+    url, place = PLACES[a.source](row)
+    path = os.path.join(a.downloads, place)
+    size = int(row['bytes'])
+    if os.path.exists(path) and os.path.getsize(path) == size:
+        return 0
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    for attempt in range(4):
+        try:
+            urllib.request.urlretrieve(url, path + '.part')
+            if os.path.getsize(path + '.part') == size:
+                os.replace(path + '.part', path)
+                return size
+        except OSError:
+            pass
+        time.sleep(5 * (attempt + 1))
+    raise RuntimeError(f'{url}: failed')
+
+
+done = got = failed = 0
+with concurrent.futures.ThreadPoolExecutor(a.jobs) as pool:
+    for future in concurrent.futures.as_completed([pool.submit(fetch, r) for r in rows]):
+        done += 1
+        try:
+            got += future.result()
+        except RuntimeError as e:
+            failed += 1
+            print(e, flush=True)
+        if done % 500 == 0 or done == len(rows):
+            print(f'{done}/{len(rows)} files, {got / 1e6:.0f} MB fetched, {failed} failed', flush=True)
