@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0c0d">
+<title>12-46Z</title>
+<style>
+  :root { --bg: #0b0c0d; --ink: #e8e6e1; --dim: #8a8780; --faint: #2c2d2f; --hot: #e2553d; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 16px system-ui, -apple-system, Segoe UI, sans-serif; }
+  body { display: flex; flex-direction: column; padding: max(16px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); }
+  h1 { margin: 0; font: 600 12px ui-monospace, Menlo, Consolas, monospace; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); }
+  main { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; gap: 14px; }
+  #time { font: 300 clamp(44px, 15vw, 96px) ui-monospace, Menlo, Consolas, monospace; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+  #who { min-height: 1.4em; font: 13px ui-monospace, Menlo, Consolas, monospace; letter-spacing: 0.14em; text-transform: uppercase; color: var(--hot);
+    transition: opacity 0.4s; }
+  #who.off { opacity: 0; }
+  #strip { position: relative; height: 44px; margin: 0 0 18px; touch-action: none; cursor: pointer; }
+  #strip .rail { position: absolute; left: 0; right: 0; top: 21px; height: 2px; background: var(--faint); }
+  #strip .done { position: absolute; left: 0; top: 21px; height: 2px; background: var(--dim); }
+  #strip .tick { position: absolute; top: 15px; width: 2px; height: 14px; background: var(--dim); opacity: 0.6; }
+  #strip .hush { position: absolute; top: 8px; width: 3px; height: 28px; background: var(--hot); }
+  #strip .head { position: absolute; top: 12px; width: 2px; height: 20px; background: var(--ink); }
+  nav { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 10px; }
+  button { min-height: 56px; border: 1px solid var(--faint); border-radius: 6px; background: none; color: var(--ink); font: 500 15px system-ui, sans-serif;
+    letter-spacing: 0.04em; -webkit-tap-highlight-color: transparent; }
+  button:active { background: var(--faint); }
+  button:disabled { opacity: 0.35; }
+  #play { border-color: var(--ink); font-size: 17px; }
+</style>
+</head>
+<body>
+<h1>American 11</h1>
+<main>
+  <div id="time">12:04:00Z</div>
+  <div id="who" class="off">&nbsp;</div>
+</main>
+<div id="strip"><div class="rail"></div><div class="done"></div><div class="head"></div></div>
+<nav>
+  <button id="back" disabled>Back</button>
+  <button id="play" disabled>Play</button>
+  <button id="next" disabled>Next</button>
+</nav>
+<audio id="audio" preload="metadata" src="american-11/mix.mp3"></audio>
+<script>
+const audio = document.getElementById('audio');
+const play = document.getElementById('play'), back = document.getElementById('back'), next = document.getElementById('next');
+const time = document.getElementById('time'), who = document.getElementById('who');
+const strip = document.getElementById('strip'), head = strip.querySelector('.head'), done = strip.querySelector('.done');
+let data = null, shown;
+const hms = (t) => [t / 3600, (t % 3600) / 60, t % 60].map((v) => String(Math.floor(v)).padStart(2, '0')).join(':') + 'Z';
+const now = () => data.lo + audio.currentTime;
+const seek = (t) => { audio.currentTime = Math.max(0, Math.min(data.hi - data.lo - 1, t - data.lo)); draw(); };
+const step = (dir) => {
+  const t = now();
+  const m = dir > 0 ? data.moments.find((k) => k[0] > t + 2) : [...data.moments].reverse().find((k) => k[0] < t - 3);
+  if (m) seek(m[0] - 1.5);
+};
+fetch('american-11/moments.json').then((r) => r.json()).then((d) => {
+  data = d;
+  const span = d.hi - d.lo;
+  d.moments.forEach(([s]) => { const t = document.createElement('div'); t.className = 'tick'; t.style.left = `${((s - d.lo) / span) * 100}%`; strip.appendChild(t); });
+  d.silence.forEach(([s]) => { const t = document.createElement('div'); t.className = 'hush'; t.style.left = `${((s - d.lo) / span) * 100}%`; strip.appendChild(t); });
+  [play, back, next].forEach((b) => (b.disabled = false));
+  draw();
+});
+play.onclick = () => (audio.paused ? audio.play() : audio.pause());
+back.onclick = () => step(-1);
+next.onclick = () => step(1);
+audio.onplay = () => (play.textContent = 'Pause');
+audio.onpause = () => (play.textContent = 'Play');
+audio.ontimeupdate = () => draw();
+const scrub = (e) => { if (!data) return; const r = strip.getBoundingClientRect(); seek(data.lo + ((e.clientX - r.left) / r.width) * (data.hi - data.lo)); };
+strip.onpointerdown = (e) => { strip.setPointerCapture(e.pointerId); scrub(e); };
+strip.onpointermove = (e) => { if (strip.hasPointerCapture(e.pointerId)) scrub(e); };
+if ('mediaSession' in navigator) {
+  navigator.mediaSession.metadata = new MediaMetadata({ title: 'American 11', artist: '12-46Z' });
+  navigator.mediaSession.setActionHandler('previoustrack', () => step(-1));
+  navigator.mediaSession.setActionHandler('nexttrack', () => step(1));
+}
+function draw() {
+  if (!data) return;
+  const t = now(), x = `${((t - data.lo) / (data.hi - data.lo)) * 100}%`;
+  time.textContent = hms(t);
+  head.style.left = x;
+  done.style.width = x;
+  const m = data.moments.find((k) => k[0] - 0.2 <= t && t <= k[1] + 1.5);
+  const name = m ? m[2] : null;
+  if (name !== shown) {
+    shown = name;
+    who.classList.toggle('off', !name);
+    if (name) who.textContent = name;
+  }
+}
+setInterval(() => { if (!audio.paused) draw(); }, 250);
+</script>
+</body>
+</html>
